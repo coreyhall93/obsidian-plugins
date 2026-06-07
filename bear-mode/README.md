@@ -6,6 +6,10 @@ This is a deliberately **minimal** plugin: it leans on Obsidian's own theming va
 
 ## Features
 
+- **Bear sidebar** — a dedicated pane with Bear's signature layout: a nested **tag tree** on top (plus *All Notes* and *Untagged*) and a **note list with previews** below. Each note shows its title, a one-line body snippet, and a Bear-style date (a time today, "Yesterday", or a short date). Click a tag to filter; click a note to open it. Open it from the ribbon (`#` icon) or the *Open Bear sidebar* command.
+  - **Search** notes by title within the current tag.
+  - **Compose button** (`+`) creates a new note, pre-seeded with the selected tag — just like Bear.
+  - The list updates live as the vault changes, and highlights the active note.
 - **Bear typography** — a comfortable reading column, generous line height, and a clean system font stack.
 - **One accent color, everywhere** — like Bear, a single color drives headings, links, tags, checkboxes, and text selection. Pick your own in settings (defaults to Bear's classic red).
 - **Tag pills** — `#tags` render as soft, rounded, accent-colored pills in both editing and reading views.
@@ -18,6 +22,9 @@ This is a deliberately **minimal** plugin: it leans on Obsidian's own theming va
 | --- | --- |
 | **Bear theme** | Turns the Bear styling on or off. |
 | **Accent color** | The single accent used across the UI. |
+| **Note previews** | Shows/hides the one-line body snippet under each note. |
+| **Sort notes by** | Order the note list by modified date, created date, or title. |
+| **Open sidebar on startup** | Reveal the Bear sidebar automatically when Obsidian starts. |
 | **Info bar** | Shows/hides the word · character · reading-time readout. |
 | **Reading speed** | Words per minute used to estimate the "min read" figure. |
 

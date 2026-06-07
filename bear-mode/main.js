@@ -4,13 +4,21 @@ if you want to view the source, please visit the github repository of this plugi
 */
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.VIEW_TYPE_BEAR = void 0;
 const obsidian_1 = require("obsidian");
+exports.VIEW_TYPE_BEAR = "bear-sidebar";
+// Special pseudo-tags used by the sidebar's tag list.
+const TAG_ALL = null;
+const TAG_UNTAGGED = "__untagged__";
 const DEFAULT_SETTINGS = {
     enableTheme: true,
     // Bear's classic red.
     accentColor: "#e0484c",
     showInfoBar: true,
     wordsPerMinute: 200,
+    showSnippets: true,
+    noteSort: "modified",
+    openSidebarOnStartup: false,
 };
 const BODY_CLASS = "bear-mode-enabled";
 class BearModePlugin extends obsidian_1.Plugin {
@@ -24,6 +32,9 @@ class BearModePlugin extends obsidian_1.Plugin {
         this.statusBarItem.addClass("bear-mode-info-bar");
         this.applyTheme();
         this.applyAccent();
+        // The Bear-style tag + note-list sidebar.
+        this.registerView(exports.VIEW_TYPE_BEAR, (leaf) => new BearSidebarView(leaf, this));
+        this.addRibbonIcon("hash", "Open Bear sidebar", () => this.activateView());
         this.addSettingTab(new BearModeSettingTab(this.app, this));
         // Keep the info bar in sync with whatever note is focused / edited.
         this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.updateInfoBar()));
@@ -38,11 +49,43 @@ class BearModePlugin extends obsidian_1.Plugin {
                 this.applyTheme();
             },
         });
-        this.app.workspace.onLayoutReady(() => this.updateInfoBar());
+        this.addCommand({
+            id: "open-bear-sidebar",
+            name: "Open Bear sidebar",
+            callback: () => this.activateView(),
+        });
+        this.app.workspace.onLayoutReady(() => {
+            this.updateInfoBar();
+            if (this.settings.openSidebarOnStartup)
+                this.activateView();
+        });
     }
     onunload() {
         document.body.removeClass(BODY_CLASS);
         document.body.style.removeProperty("--bear-accent");
+    }
+    async activateView() {
+        var _a;
+        const { workspace } = this.app;
+        let leaf = (_a = workspace.getLeavesOfType(exports.VIEW_TYPE_BEAR)[0]) !== null && _a !== void 0 ? _a : null;
+        if (!leaf) {
+            const left = workspace.getLeftLeaf(false);
+            if (!left)
+                return;
+            await left.setViewState({ type: exports.VIEW_TYPE_BEAR, active: true });
+            leaf = left;
+        }
+        workspace.revealLeaf(leaf);
+    }
+    /** Re-render any open Bear sidebars (e.g. after a settings change). */
+    refreshSidebar() {
+        this.app.workspace
+            .getLeavesOfType(exports.VIEW_TYPE_BEAR)
+            .forEach((leaf) => {
+            const view = leaf.view;
+            if (view instanceof BearSidebarView)
+                view.render();
+        });
     }
     applyTheme() {
         document.body.toggleClass(BODY_CLASS, this.settings.enableTheme);
@@ -79,9 +122,271 @@ class BearModePlugin extends obsidian_1.Plugin {
     }
 }
 exports.default = BearModePlugin;
+/* ------------------------------------------------------------------ *
+ * The Bear sidebar: a tag tree on top, a note list with previews below.
+ * ------------------------------------------------------------------ */
+class BearSidebarView extends obsidian_1.ItemView {
+    constructor(leaf, plugin) {
+        super(leaf);
+        this.selectedTag = TAG_ALL;
+        this.query = "";
+        this.refreshTimer = null;
+        this.plugin = plugin;
+    }
+    getViewType() {
+        return exports.VIEW_TYPE_BEAR;
+    }
+    getDisplayText() {
+        return "Bear";
+    }
+    getIcon() {
+        return "hash";
+    }
+    async onOpen() {
+        this.contentEl.addClass("bear-sidebar");
+        // Refresh when the vault or its metadata changes.
+        this.registerEvent(this.app.metadataCache.on("resolved", () => this.scheduleRefresh()));
+        this.registerEvent(this.app.metadataCache.on("changed", () => this.scheduleRefresh()));
+        this.registerEvent(this.app.vault.on("create", () => this.scheduleRefresh()));
+        this.registerEvent(this.app.vault.on("delete", () => this.scheduleRefresh()));
+        this.registerEvent(this.app.vault.on("rename", () => this.scheduleRefresh()));
+        this.registerEvent(this.app.workspace.on("file-open", () => this.highlightActive()));
+        this.render();
+    }
+    async onClose() {
+        if (this.refreshTimer !== null)
+            window.clearTimeout(this.refreshTimer);
+    }
+    scheduleRefresh() {
+        if (this.refreshTimer !== null)
+            window.clearTimeout(this.refreshTimer);
+        this.refreshTimer = window.setTimeout(() => this.render(), 300);
+    }
+    /** Full rebuild of the sidebar. */
+    render() {
+        const root = this.contentEl;
+        root.empty();
+        // Header: title + compose button.
+        const header = root.createDiv({ cls: "bear-header" });
+        header.createDiv({ cls: "bear-header-title", text: "Bear" });
+        const newBtn = header.createEl("button", {
+            cls: "bear-new-note",
+            text: "+",
+        });
+        newBtn.setAttr("aria-label", "New note");
+        newBtn.addEventListener("click", () => this.createNote());
+        // Search box.
+        const search = root.createEl("input", {
+            cls: "bear-search",
+            attr: { type: "text", placeholder: "Search notes" },
+        });
+        search.value = this.query;
+        search.addEventListener("input", () => {
+            this.query = search.value;
+            this.renderNotes();
+        });
+        this.tagsEl = root.createDiv({ cls: "bear-tags" });
+        this.notesEl = root.createDiv({ cls: "bear-notes" });
+        this.renderTags();
+        this.renderNotes();
+    }
+    renderTags() {
+        const el = this.tagsEl;
+        el.empty();
+        const allFiles = this.app.vault.getMarkdownFiles();
+        this.addTagRow(el, "All Notes", TAG_ALL, allFiles.length, 0, "files");
+        const untagged = allFiles.filter((f) => this.fileTags(f).length === 0).length;
+        this.addTagRow(el, "Untagged", TAG_UNTAGGED, untagged, 0, "circle-dashed");
+        const counts = this.collectTagCounts();
+        for (const path of Array.from(counts.keys()).sort()) {
+            const depth = path.split("/").length - 1;
+            const name = path.split("/").pop();
+            this.addTagRow(el, name, "#" + path, counts.get(path), depth, "");
+        }
+    }
+    addTagRow(container, label, tagValue, count, depth, iconId) {
+        const row = container.createDiv({ cls: "bear-tag-item" });
+        if (this.selectedTag === tagValue)
+            row.addClass("is-active");
+        row.style.paddingLeft = 10 + depth * 14 + "px";
+        const icon = row.createSpan({ cls: "bear-tag-icon" });
+        if (iconId)
+            (0, obsidian_1.setIcon)(icon, iconId);
+        else
+            icon.setText("#");
+        row.createSpan({ cls: "bear-tag-name", text: label });
+        row.createSpan({ cls: "bear-tag-count", text: String(count) });
+        row.addEventListener("click", () => {
+            this.selectedTag = tagValue;
+            this.render();
+        });
+    }
+    renderNotes() {
+        const el = this.notesEl;
+        el.empty();
+        let files = this.app.vault.getMarkdownFiles();
+        if (this.selectedTag === TAG_UNTAGGED) {
+            files = files.filter((f) => this.fileTags(f).length === 0);
+        }
+        else if (this.selectedTag && this.selectedTag.startsWith("#")) {
+            const tag = this.selectedTag.slice(1);
+            files = files.filter((f) => this.fileTags(f).some((t) => t === tag || t.startsWith(tag + "/")));
+        }
+        const q = this.query.trim().toLowerCase();
+        if (q) {
+            files = files.filter((f) => f.basename.toLowerCase().includes(q));
+        }
+        files = this.sortFiles(files).slice(0, 300);
+        if (files.length === 0) {
+            el.createDiv({ cls: "bear-empty", text: "No notes" });
+            return;
+        }
+        const active = this.app.workspace.getActiveFile();
+        for (const file of files) {
+            const item = el.createDiv({ cls: "bear-note-item" });
+            item.dataset.path = file.path;
+            if (active && active.path === file.path)
+                item.addClass("is-active");
+            item.createDiv({ cls: "bear-note-title", text: file.basename });
+            if (this.plugin.settings.showSnippets) {
+                const snippetEl = item.createDiv({ cls: "bear-note-snippet" });
+                this.app.vault.cachedRead(file).then((content) => {
+                    snippetEl.setText(makeSnippet(content, file.basename));
+                });
+            }
+            item.createDiv({
+                cls: "bear-note-meta",
+                text: formatDate(file.stat.mtime),
+            });
+            item.addEventListener("click", () => this.openNote(file));
+        }
+    }
+    highlightActive() {
+        if (!this.notesEl)
+            return;
+        const active = this.app.workspace.getActiveFile();
+        this.notesEl
+            .querySelectorAll(".bear-note-item")
+            .forEach((node) => {
+            const item = node;
+            item.toggleClass("is-active", !!active && item.dataset.path === active.path);
+        });
+    }
+    sortFiles(files) {
+        const arr = files.slice();
+        switch (this.plugin.settings.noteSort) {
+            case "title":
+                arr.sort((a, b) => a.basename.localeCompare(b.basename));
+                break;
+            case "created":
+                arr.sort((a, b) => b.stat.ctime - a.stat.ctime);
+                break;
+            default:
+                arr.sort((a, b) => b.stat.mtime - a.stat.mtime);
+        }
+        return arr;
+    }
+    /** Tags (without the leading #), deduplicated, for a single file. */
+    fileTags(file) {
+        const cache = this.app.metadataCache.getFileCache(file);
+        if (!cache)
+            return [];
+        const all = (0, obsidian_1.getAllTags)(cache) || [];
+        const set = new Set();
+        for (const t of all)
+            set.add(t.replace(/^#/, ""));
+        return Array.from(set);
+    }
+    /**
+     * Count, for every tag node (including intermediate parents like `work`
+     * in `work/projects`), how many notes carry that node or a descendant.
+     */
+    collectTagCounts() {
+        const counts = new Map();
+        const files = this.app.vault.getMarkdownFiles();
+        for (const file of files) {
+            const nodes = new Set();
+            for (const tag of this.fileTags(file)) {
+                let acc = "";
+                for (const part of tag.split("/")) {
+                    acc = acc ? acc + "/" + part : part;
+                    nodes.add(acc);
+                }
+            }
+            for (const node of nodes) {
+                counts.set(node, (counts.get(node) || 0) + 1);
+            }
+        }
+        return counts;
+    }
+    async openNote(file) {
+        const leaf = this.app.workspace.getLeaf(false);
+        await leaf.openFile(file);
+        this.highlightActive();
+    }
+    async createNote() {
+        const base = "Untitled";
+        let name = base;
+        let i = 1;
+        while (this.app.vault.getAbstractFileByPath(name + ".md")) {
+            name = `${base} ${i++}`;
+        }
+        // Bear seeds a new note with the currently selected tag.
+        let body = "";
+        if (this.selectedTag && this.selectedTag.startsWith("#")) {
+            body = this.selectedTag + "\n\n";
+        }
+        const file = (await this.app.vault.create(name + ".md", body));
+        await this.openNote(file);
+        this.scheduleRefresh();
+    }
+}
+/* --------------------------- helpers --------------------------- */
 function plural(n, noun) {
     return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
 }
+/** First meaningful line of body text, stripped of markdown noise. */
+function makeSnippet(content, title) {
+    let body = content;
+    // Drop YAML frontmatter.
+    if (body.startsWith("---")) {
+        const end = body.indexOf("\n---", 3);
+        if (end !== -1)
+            body = body.slice(end + 4);
+    }
+    const lines = body
+        .split("\n")
+        .map((l) => l
+        .replace(/^#+\s*/, "") // heading markers
+        .replace(/^[>\-*+]\s*/, "") // quote / list markers
+        .replace(/[`*_~]/g, "") // inline emphasis / code
+        .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // links / images -> text
+        .trim())
+        .filter((l) => l.length > 0 && l !== title);
+    return (lines[0] || "No additional text").slice(0, 120);
+}
+/** Bear-style date: a time for today, "Yesterday", otherwise a short date. */
+function formatDate(ts) {
+    const d = new Date(ts);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+        return d.toLocaleTimeString(undefined, {
+            hour: "numeric",
+            minute: "2-digit",
+        });
+    }
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString())
+        return "Yesterday";
+    const sameYear = d.getFullYear() === now.getFullYear();
+    return d.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        ...(sameYear ? {} : { year: "numeric" }),
+    });
+}
+/* --------------------------- settings --------------------------- */
 class BearModeSettingTab extends obsidian_1.PluginSettingTab {
     constructor(app, plugin) {
         super(app, plugin);
@@ -90,6 +395,7 @@ class BearModeSettingTab extends obsidian_1.PluginSettingTab {
     display() {
         const { containerEl } = this;
         containerEl.empty();
+        new obsidian_1.Setting(containerEl).setName("Appearance").setHeading();
         new obsidian_1.Setting(containerEl)
             .setName("Bear theme")
             .setDesc("Apply Bear-style typography, accent color, and tag pills to the workspace.")
@@ -110,6 +416,40 @@ class BearModeSettingTab extends obsidian_1.PluginSettingTab {
             await this.plugin.saveSettings();
             this.plugin.applyAccent();
         }));
+        new obsidian_1.Setting(containerEl).setName("Sidebar").setHeading();
+        new obsidian_1.Setting(containerEl)
+            .setName("Note previews")
+            .setDesc("Show a one-line body preview under each note.")
+            .addToggle((toggle) => toggle
+            .setValue(this.plugin.settings.showSnippets)
+            .onChange(async (value) => {
+            this.plugin.settings.showSnippets = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshSidebar();
+        }));
+        new obsidian_1.Setting(containerEl)
+            .setName("Sort notes by")
+            .setDesc("How the note list is ordered.")
+            .addDropdown((dropdown) => dropdown
+            .addOption("modified", "Modified date")
+            .addOption("created", "Created date")
+            .addOption("title", "Title")
+            .setValue(this.plugin.settings.noteSort)
+            .onChange(async (value) => {
+            this.plugin.settings.noteSort = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshSidebar();
+        }));
+        new obsidian_1.Setting(containerEl)
+            .setName("Open sidebar on startup")
+            .setDesc("Reveal the Bear sidebar automatically when Obsidian starts.")
+            .addToggle((toggle) => toggle
+            .setValue(this.plugin.settings.openSidebarOnStartup)
+            .onChange(async (value) => {
+            this.plugin.settings.openSidebarOnStartup = value;
+            await this.plugin.saveSettings();
+        }));
+        new obsidian_1.Setting(containerEl).setName("Status bar").setHeading();
         new obsidian_1.Setting(containerEl)
             .setName("Info bar")
             .setDesc("Show a Bear-style word / character / reading-time readout in the status bar.")

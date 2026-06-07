@@ -1,0 +1,9 @@
+{
+	"id": "bear-mode",
+	"name": "Bear Mode",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "Makes Obsidian look, feel, and function like Bear — clean typography, a single signature accent color, tag pills, and a Bear-style word / character / reading-time info bar.",
+	"author": "Corey Hall",
+	"isDesktopOnly": false
+}

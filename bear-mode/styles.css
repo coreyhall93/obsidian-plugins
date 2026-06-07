@@ -1,0 +1,106 @@
+/*
+ * Bear Mode — styling that gives Obsidian Bear's look & feel.
+ * Everything is scoped under `body.bear-mode-enabled` so the theme can be
+ * toggled cleanly without touching the rest of Obsidian's appearance.
+ */
+
+body.bear-mode-enabled {
+	/* Fallback accent; the plugin overrides --bear-accent at runtime. */
+	--bear-accent: #e0484c;
+
+	/* Route Obsidian's own accent variables through Bear's single accent. */
+	--interactive-accent: var(--bear-accent);
+	--interactive-accent-hover: var(--bear-accent);
+	--text-accent: var(--bear-accent);
+	--text-accent-hover: var(--bear-accent);
+	--text-selection: color-mix(in srgb, var(--bear-accent) 22%, transparent);
+	--link-color: var(--bear-accent);
+	--link-color-hover: var(--bear-accent);
+	--tag-color: var(--bear-accent);
+	--checkbox-color: var(--bear-accent);
+	--checkbox-color-hover: var(--bear-accent);
+}
+
+/* ---- Typography: clean, generous, Bear-like ---- */
+body.bear-mode-enabled .markdown-source-view.mod-cm6 .cm-content,
+body.bear-mode-enabled .markdown-preview-view {
+	font-family: -apple-system, BlinkMacSystemFont, "Avenir Next", "Segoe UI",
+		system-ui, "Helvetica Neue", sans-serif;
+	line-height: 1.7;
+	letter-spacing: 0.1px;
+}
+
+/* Comfortable reading column, like Bear's centered editor. */
+body.bear-mode-enabled .markdown-source-view.mod-cm6 .cm-contentContainer,
+body.bear-mode-enabled .markdown-preview-section {
+	max-width: 720px;
+	margin: 0 auto;
+}
+
+/* ---- Headings in the accent color, the way Bear renders them ---- */
+body.bear-mode-enabled .markdown-preview-view h1,
+body.bear-mode-enabled .markdown-preview-view h2,
+body.bear-mode-enabled .markdown-preview-view h3,
+body.bear-mode-enabled .markdown-preview-view h4,
+body.bear-mode-enabled .markdown-preview-view h5,
+body.bear-mode-enabled .markdown-preview-view h6,
+body.bear-mode-enabled .markdown-source-view.mod-cm6 .HyperMD-header {
+	color: var(--bear-accent);
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+
+/* The hash markers Bear keeps subtle. */
+body.bear-mode-enabled .markdown-source-view.mod-cm6 .cm-formatting-header {
+	opacity: 0.45;
+	font-weight: 400;
+}
+
+/* ---- Tags as rounded pills (Bear's signature) ---- */
+body.bear-mode-enabled a.tag {
+	background-color: color-mix(in srgb, var(--bear-accent) 12%, transparent);
+	color: var(--bear-accent);
+	font-weight: 600;
+	border: none;
+	border-radius: 12px;
+	padding: 2px 10px;
+	text-decoration: none;
+}
+
+body.bear-mode-enabled a.tag:hover {
+	background-color: color-mix(in srgb, var(--bear-accent) 22%, transparent);
+}
+
+/* Inline hashtags in the editor share the accent. */
+body.bear-mode-enabled .cm-hashtag {
+	color: var(--bear-accent);
+	font-weight: 600;
+}
+
+/* ---- Selection & cursor pick up the accent ---- */
+body.bear-mode-enabled .cm-selectionBackground,
+body.bear-mode-enabled .markdown-source-view ::selection,
+body.bear-mode-enabled .markdown-preview-view ::selection {
+	background: color-mix(in srgb, var(--bear-accent) 22%, transparent) !important;
+}
+
+body.bear-mode-enabled .cm-cursor {
+	border-left-color: var(--bear-accent);
+}
+
+/* ---- Sidebar / tag pane: lighter, calmer, Bear-ish ---- */
+body.bear-mode-enabled .nav-files-container,
+body.bear-mode-enabled .tag-pane-tag {
+	font-size: 0.9em;
+}
+
+body.bear-mode-enabled .tree-item-self.is-active {
+	color: var(--bear-accent);
+}
+
+/* ---- The word / character / reading-time info bar ---- */
+.bear-mode-info-bar {
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.2px;
+}

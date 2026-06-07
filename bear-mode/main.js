@@ -9,7 +9,10 @@ const obsidian_1 = require("obsidian");
 exports.VIEW_TYPE_BEAR = "bear-sidebar";
 // Special pseudo-tags used by the sidebar's tag list.
 const TAG_ALL = null;
+const TAG_TODAY = "__today__";
+const TAG_TODO = "__todo__";
 const TAG_UNTAGGED = "__untagged__";
+const TAG_ARCHIVE = "__archive__";
 const SORT_LABEL = {
     modified: "Modified date",
     created: "Created date",
@@ -37,6 +40,8 @@ const DEFAULT_SETTINGS = {
     noteSort: "modified",
     openSidebarOnStartup: false,
     pinned: [],
+    archiveFolder: "Archive",
+    collapsedTags: [],
 };
 const BODY_CLASS = "bear-mode-enabled";
 class BearModePlugin extends obsidian_1.Plugin {
@@ -86,6 +91,18 @@ class BearModePlugin extends obsidian_1.Plugin {
             id: "open-bear-sidebar",
             name: "Open Bear sidebar",
             callback: () => this.activateView(),
+        });
+        this.addCommand({
+            id: "show-note-info",
+            name: "Show note info",
+            checkCallback: (checking) => {
+                const file = this.app.workspace.getActiveFile();
+                if (!file || file.extension !== "md")
+                    return false;
+                if (!checking)
+                    new NoteInfoModal(this.app, this, file).open();
+                return true;
+            },
         });
         this.app.workspace.onLayoutReady(() => {
             this.updateInfoBar();
@@ -247,26 +264,26 @@ class BearSidebarView extends obsidian_1.ItemView {
         const el = this.tagsEl;
         el.empty();
         const allFiles = this.app.vault.getMarkdownFiles();
-        this.addTagRow(el, "All Notes", TAG_ALL, allFiles.length, 0, "files");
-        const untagged = allFiles.filter((f) => this.fileTags(f).length === 0).length;
-        this.addTagRow(el, "Untagged", TAG_UNTAGGED, untagged, 0, "circle-dashed");
-        const counts = this.collectTagCounts();
-        for (const path of Array.from(counts.keys()).sort()) {
-            const depth = path.split("/").length - 1;
-            const name = path.split("/").pop();
-            this.addTagRow(el, name, "#" + path, counts.get(path), depth, "");
-        }
+        const active = allFiles.filter((f) => !this.isArchived(f));
+        // Bear's smart sections.
+        this.addSpecialRow(el, "All Notes", TAG_ALL, active.length, "files");
+        this.addSpecialRow(el, "Today", TAG_TODAY, active.filter((f) => this.isToday(f)).length, "calendar");
+        this.addSpecialRow(el, "To Do", TAG_TODO, active.filter((f) => this.hasOpenTask(f)).length, "check-square");
+        this.addSpecialRow(el, "Untagged", TAG_UNTAGGED, active.filter((f) => this.fileTags(f).length === 0).length, "circle-dashed");
+        // Collapsible nested tag tree.
+        const tree = buildTagTree(this.collectTagCounts());
+        for (const node of tree)
+            this.renderTagNode(el, node, 0);
+        // Archive lives at the bottom, like Bear.
+        this.addSpecialRow(el, "Archive", TAG_ARCHIVE, allFiles.length - active.length, "archive");
     }
-    addTagRow(container, label, tagValue, count, depth, iconId) {
+    addSpecialRow(container, label, tagValue, count, iconId) {
         const row = container.createDiv({ cls: "bear-tag-item" });
         if (this.selectedTag === tagValue)
             row.addClass("is-active");
-        row.style.paddingLeft = 10 + depth * 14 + "px";
+        row.createSpan({ cls: "bear-tag-twisty is-leaf" });
         const icon = row.createSpan({ cls: "bear-tag-icon" });
-        if (iconId)
-            (0, obsidian_1.setIcon)(icon, iconId);
-        else
-            icon.setText("#");
+        (0, obsidian_1.setIcon)(icon, iconId);
         row.createSpan({ cls: "bear-tag-name", text: label });
         row.createSpan({ cls: "bear-tag-count", text: String(count) });
         row.addEventListener("click", () => {
@@ -274,16 +291,70 @@ class BearSidebarView extends obsidian_1.ItemView {
             this.render();
         });
     }
+    renderTagNode(container, node, depth) {
+        const hasChildren = node.children.length > 0;
+        const collapsed = this.plugin.settings.collapsedTags.includes(node.path);
+        const row = container.createDiv({ cls: "bear-tag-item" });
+        if (this.selectedTag === "#" + node.path)
+            row.addClass("is-active");
+        row.style.paddingLeft = 8 + depth * 14 + "px";
+        const twisty = row.createSpan({ cls: "bear-tag-twisty" });
+        if (hasChildren) {
+            (0, obsidian_1.setIcon)(twisty, collapsed ? "chevron-right" : "chevron-down");
+            twisty.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.toggleCollapse(node.path);
+            });
+        }
+        else {
+            twisty.addClass("is-leaf");
+        }
+        row.createSpan({ cls: "bear-tag-icon", text: "#" });
+        row.createSpan({ cls: "bear-tag-name", text: node.name });
+        row.createSpan({ cls: "bear-tag-count", text: String(node.count) });
+        row.addEventListener("click", () => {
+            this.selectedTag = "#" + node.path;
+            this.render();
+        });
+        if (hasChildren && !collapsed) {
+            for (const child of node.children) {
+                this.renderTagNode(container, child, depth + 1);
+            }
+        }
+    }
+    async toggleCollapse(path) {
+        const arr = this.plugin.settings.collapsedTags;
+        const i = arr.indexOf(path);
+        if (i >= 0)
+            arr.splice(i, 1);
+        else
+            arr.push(path);
+        await this.plugin.saveSettings();
+        this.renderTags();
+    }
     renderNotes() {
         const el = this.notesEl;
         el.empty();
         let files = this.app.vault.getMarkdownFiles();
-        if (this.selectedTag === TAG_UNTAGGED) {
-            files = files.filter((f) => this.fileTags(f).length === 0);
+        if (this.selectedTag === TAG_ARCHIVE) {
+            files = files.filter((f) => this.isArchived(f));
         }
-        else if (this.selectedTag && this.selectedTag.startsWith("#")) {
-            const tag = this.selectedTag.slice(1);
-            files = files.filter((f) => this.fileTags(f).some((t) => t === tag || t.startsWith(tag + "/")));
+        else {
+            // Every other view hides archived notes, like Bear.
+            files = files.filter((f) => !this.isArchived(f));
+            if (this.selectedTag === TAG_TODAY) {
+                files = files.filter((f) => this.isToday(f));
+            }
+            else if (this.selectedTag === TAG_TODO) {
+                files = files.filter((f) => this.hasOpenTask(f));
+            }
+            else if (this.selectedTag === TAG_UNTAGGED) {
+                files = files.filter((f) => this.fileTags(f).length === 0);
+            }
+            else if (this.selectedTag && this.selectedTag.startsWith("#")) {
+                const tag = this.selectedTag.slice(1);
+                files = files.filter((f) => this.fileTags(f).some((t) => t === tag || t.startsWith(tag + "/")));
+            }
         }
         const q = this.query.trim().toLowerCase();
         if (q) {
@@ -291,11 +362,7 @@ class BearSidebarView extends obsidian_1.ItemView {
         }
         files = this.sortFiles(files).slice(0, 300);
         // List header: scope name + count + sort toggle.
-        const scope = this.selectedTag === TAG_ALL
-            ? "All Notes"
-            : this.selectedTag === TAG_UNTAGGED
-                ? "Untagged"
-                : this.selectedTag.replace(/^#/, "");
+        const scope = this.scopeName();
         const listHeader = el.createDiv({ cls: "bear-notes-header" });
         listHeader.createSpan({
             cls: "bear-notes-scope",
@@ -371,6 +438,10 @@ class BearSidebarView extends obsidian_1.ItemView {
             const leaf = this.app.workspace.getLeaf("tab");
             await leaf.openFile(file);
         }));
+        menu.addItem((i) => i
+            .setTitle(this.isArchived(file) ? "Unarchive" : "Archive")
+            .setIcon("archive")
+            .onClick(() => this.toggleArchive(file)));
         menu.addSeparator();
         menu.addItem((i) => i
             .setTitle("Rename")
@@ -410,6 +481,57 @@ class BearSidebarView extends obsidian_1.ItemView {
         }
         return arr;
     }
+    scopeName() {
+        switch (this.selectedTag) {
+            case TAG_ALL:
+                return "All Notes";
+            case TAG_TODAY:
+                return "Today";
+            case TAG_TODO:
+                return "To Do";
+            case TAG_UNTAGGED:
+                return "Untagged";
+            case TAG_ARCHIVE:
+                return "Archive";
+            default:
+                return this.selectedTag.replace(/^#/, "");
+        }
+    }
+    isArchived(file) {
+        const folder = this.plugin.settings.archiveFolder.trim();
+        if (!folder)
+            return false;
+        return file.path.startsWith(folder + "/");
+    }
+    isToday(file) {
+        return (new Date(file.stat.mtime).toDateString() ===
+            new Date().toDateString());
+    }
+    hasOpenTask(file) {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const items = cache && cache.listItems;
+        if (!items)
+            return false;
+        return items.some((it) => it.task === " ");
+    }
+    async toggleArchive(file) {
+        const folder = this.plugin.settings.archiveFolder.trim() || "Archive";
+        try {
+            if (this.isArchived(file)) {
+                await this.app.fileManager.renameFile(file, file.name);
+            }
+            else {
+                if (!this.app.vault.getAbstractFileByPath(folder)) {
+                    await this.app.vault.createFolder(folder);
+                }
+                await this.app.fileManager.renameFile(file, folder + "/" + file.name);
+            }
+        }
+        catch (e) {
+            /* destination exists or is invalid — leave the note in place */
+        }
+        this.scheduleRefresh();
+    }
     /** Tags (without the leading #), deduplicated, for a single file. */
     fileTags(file) {
         const cache = this.app.metadataCache.getFileCache(file);
@@ -427,7 +549,7 @@ class BearSidebarView extends obsidian_1.ItemView {
      */
     collectTagCounts() {
         const counts = new Map();
-        const files = this.app.vault.getMarkdownFiles();
+        const files = this.app.vault.getMarkdownFiles().filter((f) => !this.isArchived(f));
         for (const file of files) {
             const nodes = new Set();
             for (const tag of this.fileTags(file)) {
@@ -515,7 +637,80 @@ class RenameModal extends obsidian_1.Modal {
         this.contentEl.empty();
     }
 }
-/* --------------------------- helpers --------------------------- */
+/* ----------------------- note info modal ----------------------- */
+class NoteInfoModal extends obsidian_1.Modal {
+    constructor(app, plugin, file) {
+        super(app);
+        this.plugin = plugin;
+        this.file = file;
+    }
+    async onOpen() {
+        const { contentEl } = this;
+        contentEl.addClass("bear-info-modal");
+        contentEl.createEl("h3", { text: this.file.basename });
+        const content = await this.app.vault.cachedRead(this.file);
+        let body = content;
+        if (body.startsWith("---")) {
+            const end = body.indexOf("\n---", 3);
+            if (end !== -1)
+                body = body.slice(end + 4);
+        }
+        const words = (body.match(/[\p{L}\p{N}'’\-]+/gu) || []).length;
+        const characters = body.length;
+        const paragraphs = body
+            .split(/\n\s*\n/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0).length;
+        const minutes = Math.max(1, Math.round(words / Math.max(1, this.plugin.settings.wordsPerMinute)));
+        const cache = this.app.metadataCache.getFileCache(this.file);
+        const tags = (cache && (0, obsidian_1.getAllTags)(cache)) || [];
+        const list = contentEl.createDiv({ cls: "bear-info-list" });
+        const row = (label, value) => {
+            const r = list.createDiv({ cls: "bear-info-row" });
+            r.createSpan({ cls: "bear-info-label", text: label });
+            r.createSpan({ cls: "bear-info-value", text: value });
+        };
+        row("Words", words.toLocaleString());
+        row("Characters", characters.toLocaleString());
+        row("Paragraphs", paragraphs.toLocaleString());
+        row("Reading time", `${minutes} min`);
+        row("Created", new Date(this.file.stat.ctime).toLocaleString());
+        row("Modified", new Date(this.file.stat.mtime).toLocaleString());
+        if (tags.length)
+            row("Tags", tags.join("  "));
+    }
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+/** Turn a flat map of tag paths -> counts into a nested tree. */
+function buildTagTree(counts) {
+    const nodes = new Map();
+    for (const [path, count] of counts) {
+        nodes.set(path, {
+            path,
+            name: path.split("/").pop(),
+            count,
+            children: [],
+        });
+    }
+    const roots = [];
+    for (const path of Array.from(nodes.keys()).sort()) {
+        const node = nodes.get(path);
+        const idx = path.lastIndexOf("/");
+        if (idx === -1) {
+            roots.push(node);
+        }
+        else {
+            const parent = nodes.get(path.slice(0, idx));
+            if (parent)
+                parent.children.push(node);
+            else
+                roots.push(node);
+        }
+    }
+    return roots;
+}
 function plural(n, noun) {
     return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
 }
@@ -628,6 +823,17 @@ class BearModeSettingTab extends obsidian_1.PluginSettingTab {
             .setValue(this.plugin.settings.noteSort)
             .onChange(async (value) => {
             this.plugin.settings.noteSort = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshSidebar();
+        }));
+        new obsidian_1.Setting(containerEl)
+            .setName("Archive folder")
+            .setDesc("Notes moved here are hidden from every view except Archive.")
+            .addText((text) => text
+            .setPlaceholder("Archive")
+            .setValue(this.plugin.settings.archiveFolder)
+            .onChange(async (value) => {
+            this.plugin.settings.archiveFolder = value;
             await this.plugin.saveSettings();
             this.plugin.refreshSidebar();
         }));

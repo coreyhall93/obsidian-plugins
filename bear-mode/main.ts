@@ -17,7 +17,10 @@ export const VIEW_TYPE_BEAR = "bear-sidebar";
 
 // Special pseudo-tags used by the sidebar's tag list.
 const TAG_ALL = null;
+const TAG_TODAY = "__today__";
+const TAG_TODO = "__todo__";
 const TAG_UNTAGGED = "__untagged__";
+const TAG_ARCHIVE = "__archive__";
 
 type NoteSort = "modified" | "created" | "title";
 
@@ -66,6 +69,10 @@ interface BearModeSettings {
 	openSidebarOnStartup: boolean;
 	/** Paths of notes pinned to the top of the list. */
 	pinned: string[];
+	/** Folder that holds archived notes. */
+	archiveFolder: string;
+	/** Tag-tree node paths that are currently collapsed. */
+	collapsedTags: string[];
 }
 
 const DEFAULT_SETTINGS: BearModeSettings = {
@@ -78,6 +85,8 @@ const DEFAULT_SETTINGS: BearModeSettings = {
 	noteSort: "modified",
 	openSidebarOnStartup: false,
 	pinned: [],
+	archiveFolder: "Archive",
+	collapsedTags: [],
 };
 
 const BODY_CLASS = "bear-mode-enabled";
@@ -153,6 +162,17 @@ export default class BearModePlugin extends Plugin {
 			id: "open-bear-sidebar",
 			name: "Open Bear sidebar",
 			callback: () => this.activateView(),
+		});
+
+		this.addCommand({
+			id: "show-note-info",
+			name: "Show note info",
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") return false;
+				if (!checking) new NoteInfoModal(this.app, this, file).open();
+				return true;
+			},
 		});
 
 		this.app.workspace.onLayoutReady(() => {
@@ -371,51 +391,59 @@ class BearSidebarView extends ItemView {
 		el.empty();
 
 		const allFiles = this.app.vault.getMarkdownFiles() as TFile[];
+		const active = allFiles.filter((f) => !this.isArchived(f));
 
-		this.addTagRow(el, "All Notes", TAG_ALL, allFiles.length, 0, "files");
-
-		const untagged = allFiles.filter(
-			(f) => this.fileTags(f).length === 0
-		).length;
-		this.addTagRow(
+		// Bear's smart sections.
+		this.addSpecialRow(el, "All Notes", TAG_ALL, active.length, "files");
+		this.addSpecialRow(
+			el,
+			"Today",
+			TAG_TODAY,
+			active.filter((f) => this.isToday(f)).length,
+			"calendar"
+		);
+		this.addSpecialRow(
+			el,
+			"To Do",
+			TAG_TODO,
+			active.filter((f) => this.hasOpenTask(f)).length,
+			"check-square"
+		);
+		this.addSpecialRow(
 			el,
 			"Untagged",
 			TAG_UNTAGGED,
-			untagged,
-			0,
+			active.filter((f) => this.fileTags(f).length === 0).length,
 			"circle-dashed"
 		);
 
-		const counts = this.collectTagCounts();
-		for (const path of Array.from(counts.keys()).sort()) {
-			const depth = path.split("/").length - 1;
-			const name = path.split("/").pop() as string;
-			this.addTagRow(
-				el,
-				name,
-				"#" + path,
-				counts.get(path) as number,
-				depth,
-				""
-			);
-		}
+		// Collapsible nested tag tree.
+		const tree = buildTagTree(this.collectTagCounts());
+		for (const node of tree) this.renderTagNode(el, node, 0);
+
+		// Archive lives at the bottom, like Bear.
+		this.addSpecialRow(
+			el,
+			"Archive",
+			TAG_ARCHIVE,
+			allFiles.length - active.length,
+			"archive"
+		);
 	}
 
-	private addTagRow(
+	private addSpecialRow(
 		container: HTMLElement,
 		label: string,
 		tagValue: string | null,
 		count: number,
-		depth: number,
 		iconId: string
 	) {
 		const row = container.createDiv({ cls: "bear-tag-item" });
 		if (this.selectedTag === tagValue) row.addClass("is-active");
-		row.style.paddingLeft = 10 + depth * 14 + "px";
 
+		row.createSpan({ cls: "bear-tag-twisty is-leaf" });
 		const icon = row.createSpan({ cls: "bear-tag-icon" });
-		if (iconId) setIcon(icon, iconId);
-		else icon.setText("#");
+		setIcon(icon, iconId);
 
 		row.createSpan({ cls: "bear-tag-name", text: label });
 		row.createSpan({ cls: "bear-tag-count", text: String(count) });
@@ -426,21 +454,82 @@ class BearSidebarView extends ItemView {
 		});
 	}
 
+	private renderTagNode(
+		container: HTMLElement,
+		node: TagNode,
+		depth: number
+	) {
+		const hasChildren = node.children.length > 0;
+		const collapsed = this.plugin.settings.collapsedTags.includes(
+			node.path
+		);
+
+		const row = container.createDiv({ cls: "bear-tag-item" });
+		if (this.selectedTag === "#" + node.path) row.addClass("is-active");
+		row.style.paddingLeft = 8 + depth * 14 + "px";
+
+		const twisty = row.createSpan({ cls: "bear-tag-twisty" });
+		if (hasChildren) {
+			setIcon(twisty, collapsed ? "chevron-right" : "chevron-down");
+			twisty.addEventListener("click", (e: MouseEvent) => {
+				e.stopPropagation();
+				this.toggleCollapse(node.path);
+			});
+		} else {
+			twisty.addClass("is-leaf");
+		}
+
+		row.createSpan({ cls: "bear-tag-icon", text: "#" });
+		row.createSpan({ cls: "bear-tag-name", text: node.name });
+		row.createSpan({ cls: "bear-tag-count", text: String(node.count) });
+
+		row.addEventListener("click", () => {
+			this.selectedTag = "#" + node.path;
+			this.render();
+		});
+
+		if (hasChildren && !collapsed) {
+			for (const child of node.children) {
+				this.renderTagNode(container, child, depth + 1);
+			}
+		}
+	}
+
+	private async toggleCollapse(path: string) {
+		const arr = this.plugin.settings.collapsedTags;
+		const i = arr.indexOf(path);
+		if (i >= 0) arr.splice(i, 1);
+		else arr.push(path);
+		await this.plugin.saveSettings();
+		this.renderTags();
+	}
+
 	private renderNotes() {
 		const el = this.notesEl;
 		el.empty();
 
 		let files = this.app.vault.getMarkdownFiles() as TFile[];
 
-		if (this.selectedTag === TAG_UNTAGGED) {
-			files = files.filter((f) => this.fileTags(f).length === 0);
-		} else if (this.selectedTag && this.selectedTag.startsWith("#")) {
-			const tag = this.selectedTag.slice(1);
-			files = files.filter((f) =>
-				this.fileTags(f).some(
-					(t) => t === tag || t.startsWith(tag + "/")
-				)
-			);
+		if (this.selectedTag === TAG_ARCHIVE) {
+			files = files.filter((f) => this.isArchived(f));
+		} else {
+			// Every other view hides archived notes, like Bear.
+			files = files.filter((f) => !this.isArchived(f));
+
+			if (this.selectedTag === TAG_TODAY) {
+				files = files.filter((f) => this.isToday(f));
+			} else if (this.selectedTag === TAG_TODO) {
+				files = files.filter((f) => this.hasOpenTask(f));
+			} else if (this.selectedTag === TAG_UNTAGGED) {
+				files = files.filter((f) => this.fileTags(f).length === 0);
+			} else if (this.selectedTag && this.selectedTag.startsWith("#")) {
+				const tag = this.selectedTag.slice(1);
+				files = files.filter((f) =>
+					this.fileTags(f).some(
+						(t) => t === tag || t.startsWith(tag + "/")
+					)
+				);
+			}
 		}
 
 		const q = this.query.trim().toLowerCase();
@@ -451,12 +540,7 @@ class BearSidebarView extends ItemView {
 		files = this.sortFiles(files).slice(0, 300);
 
 		// List header: scope name + count + sort toggle.
-		const scope =
-			this.selectedTag === TAG_ALL
-				? "All Notes"
-				: this.selectedTag === TAG_UNTAGGED
-				? "Untagged"
-				: (this.selectedTag as string).replace(/^#/, "");
+		const scope = this.scopeName();
 		const listHeader = el.createDiv({ cls: "bear-notes-header" });
 		listHeader.createSpan({
 			cls: "bear-notes-scope",
@@ -556,6 +640,12 @@ class BearSidebarView extends ItemView {
 					await leaf.openFile(file);
 				})
 		);
+		menu.addItem((i: any) =>
+			i
+				.setTitle(this.isArchived(file) ? "Unarchive" : "Archive")
+				.setIcon("archive")
+				.onClick(() => this.toggleArchive(file))
+		);
 		menu.addSeparator();
 		menu.addItem((i: any) =>
 			i
@@ -604,6 +694,63 @@ class BearSidebarView extends ItemView {
 		return arr;
 	}
 
+	private scopeName(): string {
+		switch (this.selectedTag) {
+			case TAG_ALL:
+				return "All Notes";
+			case TAG_TODAY:
+				return "Today";
+			case TAG_TODO:
+				return "To Do";
+			case TAG_UNTAGGED:
+				return "Untagged";
+			case TAG_ARCHIVE:
+				return "Archive";
+			default:
+				return (this.selectedTag as string).replace(/^#/, "");
+		}
+	}
+
+	private isArchived(file: TFile): boolean {
+		const folder = this.plugin.settings.archiveFolder.trim();
+		if (!folder) return false;
+		return file.path.startsWith(folder + "/");
+	}
+
+	private isToday(file: TFile): boolean {
+		return (
+			new Date(file.stat.mtime).toDateString() ===
+			new Date().toDateString()
+		);
+	}
+
+	private hasOpenTask(file: TFile): boolean {
+		const cache = this.app.metadataCache.getFileCache(file);
+		const items = cache && cache.listItems;
+		if (!items) return false;
+		return items.some((it: any) => it.task === " ");
+	}
+
+	private async toggleArchive(file: TFile) {
+		const folder = this.plugin.settings.archiveFolder.trim() || "Archive";
+		try {
+			if (this.isArchived(file)) {
+				await this.app.fileManager.renameFile(file, file.name);
+			} else {
+				if (!this.app.vault.getAbstractFileByPath(folder)) {
+					await this.app.vault.createFolder(folder);
+				}
+				await this.app.fileManager.renameFile(
+					file,
+					folder + "/" + file.name
+				);
+			}
+		} catch (e) {
+			/* destination exists or is invalid — leave the note in place */
+		}
+		this.scheduleRefresh();
+	}
+
 	/** Tags (without the leading #), deduplicated, for a single file. */
 	private fileTags(file: TFile): string[] {
 		const cache = this.app.metadataCache.getFileCache(file);
@@ -620,7 +767,9 @@ class BearSidebarView extends ItemView {
 	 */
 	private collectTagCounts(): Map<string, number> {
 		const counts = new Map<string, number>();
-		const files = this.app.vault.getMarkdownFiles() as TFile[];
+		const files = (this.app.vault.getMarkdownFiles() as TFile[]).filter(
+			(f) => !this.isArchived(f)
+		);
 
 		for (const file of files) {
 			const nodes = new Set<string>();
@@ -728,7 +877,101 @@ class RenameModal extends Modal {
 	}
 }
 
+/* ----------------------- note info modal ----------------------- */
+
+class NoteInfoModal extends Modal {
+	private plugin: BearModePlugin;
+	private file: TFile;
+
+	constructor(app: App, plugin: BearModePlugin, file: TFile) {
+		super(app);
+		this.plugin = plugin;
+		this.file = file;
+	}
+
+	async onOpen() {
+		const { contentEl } = this;
+		contentEl.addClass("bear-info-modal");
+		contentEl.createEl("h3", { text: this.file.basename });
+
+		const content: string = await this.app.vault.cachedRead(this.file);
+
+		let body = content;
+		if (body.startsWith("---")) {
+			const end = body.indexOf("\n---", 3);
+			if (end !== -1) body = body.slice(end + 4);
+		}
+
+		const words = (body.match(/[\p{L}\p{N}'’\-]+/gu) || []).length;
+		const characters = body.length;
+		const paragraphs = body
+			.split(/\n\s*\n/)
+			.map((s) => s.trim())
+			.filter((s) => s.length > 0).length;
+		const minutes = Math.max(
+			1,
+			Math.round(words / Math.max(1, this.plugin.settings.wordsPerMinute))
+		);
+
+		const cache = this.app.metadataCache.getFileCache(this.file);
+		const tags: string[] = (cache && getAllTags(cache)) || [];
+
+		const list = contentEl.createDiv({ cls: "bear-info-list" });
+		const row = (label: string, value: string) => {
+			const r = list.createDiv({ cls: "bear-info-row" });
+			r.createSpan({ cls: "bear-info-label", text: label });
+			r.createSpan({ cls: "bear-info-value", text: value });
+		};
+
+		row("Words", words.toLocaleString());
+		row("Characters", characters.toLocaleString());
+		row("Paragraphs", paragraphs.toLocaleString());
+		row("Reading time", `${minutes} min`);
+		row("Created", new Date(this.file.stat.ctime).toLocaleString());
+		row("Modified", new Date(this.file.stat.mtime).toLocaleString());
+		if (tags.length) row("Tags", tags.join("  "));
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
 /* --------------------------- helpers --------------------------- */
+
+interface TagNode {
+	path: string;
+	name: string;
+	count: number;
+	children: TagNode[];
+}
+
+/** Turn a flat map of tag paths -> counts into a nested tree. */
+function buildTagTree(counts: Map<string, number>): TagNode[] {
+	const nodes = new Map<string, TagNode>();
+	for (const [path, count] of counts) {
+		nodes.set(path, {
+			path,
+			name: path.split("/").pop() as string,
+			count,
+			children: [],
+		});
+	}
+
+	const roots: TagNode[] = [];
+	for (const path of Array.from(nodes.keys()).sort()) {
+		const node = nodes.get(path) as TagNode;
+		const idx = path.lastIndexOf("/");
+		if (idx === -1) {
+			roots.push(node);
+		} else {
+			const parent = nodes.get(path.slice(0, idx));
+			if (parent) parent.children.push(node);
+			else roots.push(node);
+		}
+	}
+	return roots;
+}
 
 function plural(n: number, noun: string): string {
 	return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
@@ -875,6 +1118,22 @@ class BearModeSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.noteSort)
 					.onChange(async (value: NoteSort) => {
 						this.plugin.settings.noteSort = value;
+						await this.plugin.saveSettings();
+						this.plugin.refreshSidebar();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Archive folder")
+			.setDesc(
+				"Notes moved here are hidden from every view except Archive."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("Archive")
+					.setValue(this.plugin.settings.archiveFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.archiveFolder = value;
 						await this.plugin.saveSettings();
 						this.plugin.refreshSidebar();
 					})

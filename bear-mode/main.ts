@@ -2,6 +2,8 @@ import {
 	App,
 	ItemView,
 	MarkdownView,
+	Menu,
+	Modal,
 	Plugin,
 	PluginSettingTab,
 	Setting,
@@ -19,9 +21,37 @@ const TAG_UNTAGGED = "__untagged__";
 
 type NoteSort = "modified" | "created" | "title";
 
+const SORT_LABEL: Record<NoteSort, string> = {
+	modified: "Modified date",
+	created: "Created date",
+	title: "Title",
+};
+
+interface BearTheme {
+	id: string;
+	name: string;
+	/** Accent color; empty means "use the custom color picker value". */
+	accent: string;
+}
+
+// Bear's signature themes, approximated by their accent colors.
+const BEAR_THEMES: BearTheme[] = [
+	{ id: "red-graphite", name: "Red Graphite", accent: "#e0484c" },
+	{ id: "charcoal", name: "Charcoal", accent: "#f24b59" },
+	{ id: "solarized", name: "Solarized", accent: "#268bd2" },
+	{ id: "gotham", name: "Gotham", accent: "#2aa198" },
+	{ id: "toothpaste", name: "Toothpaste", accent: "#16b8c4" },
+	{ id: "cobalt", name: "Cobalt", accent: "#2f72e0" },
+	{ id: "dracula", name: "Dracula", accent: "#bd93f9" },
+	{ id: "panic-mode", name: "Panic Mode", accent: "#ff3b30" },
+	{ id: "custom", name: "Custom", accent: "" },
+];
+
 interface BearModeSettings {
 	/** Apply the Bear-style theme (typography, accent, tag pills). */
 	enableTheme: boolean;
+	/** The selected named Bear theme (or "custom"). */
+	themePreset: string;
 	/** Bear's signature single accent color, applied across the UI. */
 	accentColor: string;
 	/** Show the Bear-style word / character / reading-time bar in the status bar. */
@@ -34,17 +64,20 @@ interface BearModeSettings {
 	noteSort: NoteSort;
 	/** Open the Bear sidebar automatically when the app starts. */
 	openSidebarOnStartup: boolean;
+	/** Paths of notes pinned to the top of the list. */
+	pinned: string[];
 }
 
 const DEFAULT_SETTINGS: BearModeSettings = {
 	enableTheme: true,
-	// Bear's classic red.
+	themePreset: "red-graphite",
 	accentColor: "#e0484c",
 	showInfoBar: true,
 	wordsPerMinute: 200,
 	showSnippets: true,
 	noteSort: "modified",
 	openSidebarOnStartup: false,
+	pinned: [],
 };
 
 const BODY_CLASS = "bear-mode-enabled";
@@ -84,6 +117,26 @@ export default class BearModePlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.workspace.on("file-open", () => this.updateInfoBar())
+		);
+
+		// Drop pins that point at notes which no longer exist.
+		this.registerEvent(
+			this.app.vault.on("delete", (file: TFile) => {
+				const i = this.settings.pinned.indexOf(file.path);
+				if (i >= 0) {
+					this.settings.pinned.splice(i, 1);
+					this.saveSettings();
+				}
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file: TFile, oldPath: string) => {
+				const i = this.settings.pinned.indexOf(oldPath);
+				if (i >= 0) {
+					this.settings.pinned[i] = file.path;
+					this.saveSettings();
+				}
+			})
 		);
 
 		this.addCommand({
@@ -137,6 +190,18 @@ export default class BearModePlugin extends Plugin {
 			});
 	}
 
+	isPinned(path: string): boolean {
+		return this.settings.pinned.includes(path);
+	}
+
+	async togglePin(path: string) {
+		const i = this.settings.pinned.indexOf(path);
+		if (i >= 0) this.settings.pinned.splice(i, 1);
+		else this.settings.pinned.push(path);
+		await this.saveSettings();
+		this.refreshSidebar();
+	}
+
 	applyTheme() {
 		document.body.toggleClass(BODY_CLASS, this.settings.enableTheme);
 	}
@@ -146,6 +211,14 @@ export default class BearModePlugin extends Plugin {
 			"--bear-accent",
 			this.settings.accentColor
 		);
+	}
+
+	/** Switch to a named Bear theme (updates the accent color). */
+	applyThemePreset(id: string) {
+		this.settings.themePreset = id;
+		const theme = BEAR_THEMES.find((t) => t.id === id);
+		if (theme && theme.accent) this.settings.accentColor = theme.accent;
+		this.applyAccent();
 	}
 
 	updateInfoBar() {
@@ -377,33 +450,129 @@ class BearSidebarView extends ItemView {
 
 		files = this.sortFiles(files).slice(0, 300);
 
+		// List header: scope name + count + sort toggle.
+		const scope =
+			this.selectedTag === TAG_ALL
+				? "All Notes"
+				: this.selectedTag === TAG_UNTAGGED
+				? "Untagged"
+				: (this.selectedTag as string).replace(/^#/, "");
+		const listHeader = el.createDiv({ cls: "bear-notes-header" });
+		listHeader.createSpan({
+			cls: "bear-notes-scope",
+			text: `${scope} · ${files.length}`,
+		});
+		const sortBtn = listHeader.createSpan({ cls: "bear-sort-btn" });
+		setIcon(sortBtn, "arrow-up-down");
+		sortBtn.setAttr(
+			"aria-label",
+			`Sort by ${SORT_LABEL[this.plugin.settings.noteSort]}`
+		);
+		sortBtn.addEventListener("click", async () => {
+			const order: NoteSort[] = ["modified", "created", "title"];
+			const next =
+				order[
+					(order.indexOf(this.plugin.settings.noteSort) + 1) %
+						order.length
+				];
+			this.plugin.settings.noteSort = next;
+			await this.plugin.saveSettings();
+			this.renderNotes();
+		});
+
+		const list = el.createDiv({ cls: "bear-notes-list" });
+
 		if (files.length === 0) {
-			el.createDiv({ cls: "bear-empty", text: "No notes" });
+			list.createDiv({ cls: "bear-empty", text: "No notes" });
 			return;
 		}
 
-		const active = this.app.workspace.getActiveFile();
-		for (const file of files) {
-			const item = el.createDiv({ cls: "bear-note-item" });
-			item.dataset.path = file.path;
-			if (active && active.path === file.path) item.addClass("is-active");
+		// Pinned notes float to the top, like Bear.
+		const pinnedSet = new Set(this.plugin.settings.pinned);
+		const pinned = files.filter((f) => pinnedSet.has(f.path));
+		const others = files.filter((f) => !pinnedSet.has(f.path));
 
-			item.createDiv({ cls: "bear-note-title", text: file.basename });
-
-			if (this.plugin.settings.showSnippets) {
-				const snippetEl = item.createDiv({ cls: "bear-note-snippet" });
-				this.app.vault.cachedRead(file).then((content: string) => {
-					snippetEl.setText(makeSnippet(content, file.basename));
-				});
-			}
-
-			item.createDiv({
-				cls: "bear-note-meta",
-				text: formatDate(file.stat.mtime),
-			});
-
-			item.addEventListener("click", () => this.openNote(file));
+		if (pinned.length) {
+			list.createDiv({ cls: "bear-list-section", text: "Pinned" });
+			for (const f of pinned) this.renderNoteItem(list, f, true);
+			if (others.length)
+				list.createDiv({ cls: "bear-list-divider" });
 		}
+		for (const f of others) this.renderNoteItem(list, f, false);
+	}
+
+	private renderNoteItem(
+		container: HTMLElement,
+		file: TFile,
+		pinned: boolean
+	) {
+		const item = container.createDiv({ cls: "bear-note-item" });
+		item.dataset.path = file.path;
+		const active = this.app.workspace.getActiveFile();
+		if (active && active.path === file.path) item.addClass("is-active");
+
+		const titleRow = item.createDiv({ cls: "bear-note-title-row" });
+		if (pinned) {
+			const pin = titleRow.createSpan({ cls: "bear-pin-icon" });
+			setIcon(pin, "pin");
+		}
+		titleRow.createSpan({ cls: "bear-note-title", text: file.basename });
+
+		if (this.plugin.settings.showSnippets) {
+			const snippetEl = item.createDiv({ cls: "bear-note-snippet" });
+			this.app.vault.cachedRead(file).then((content: string) => {
+				snippetEl.setText(makeSnippet(content, file.basename));
+			});
+		}
+
+		item.createDiv({
+			cls: "bear-note-meta",
+			text: formatDate(file.stat.mtime),
+		});
+
+		item.addEventListener("click", () => this.openNote(file));
+		item.addEventListener("contextmenu", (evt: MouseEvent) =>
+			this.showNoteMenu(evt, file)
+		);
+	}
+
+	private showNoteMenu(evt: MouseEvent, file: TFile) {
+		evt.preventDefault();
+		const menu = new Menu();
+		const isPinned = this.plugin.isPinned(file.path);
+
+		menu.addItem((i: any) =>
+			i
+				.setTitle(isPinned ? "Unpin" : "Pin to top")
+				.setIcon("pin")
+				.onClick(() => this.plugin.togglePin(file.path))
+		);
+		menu.addItem((i: any) =>
+			i
+				.setTitle("Open in new tab")
+				.setIcon("file-plus")
+				.onClick(async () => {
+					const leaf = this.app.workspace.getLeaf("tab");
+					await leaf.openFile(file);
+				})
+		);
+		menu.addSeparator();
+		menu.addItem((i: any) =>
+			i
+				.setTitle("Rename")
+				.setIcon("pencil")
+				.onClick(() => new RenameModal(this.app, file).open())
+		);
+		menu.addItem((i: any) =>
+			i
+				.setTitle("Delete")
+				.setIcon("trash")
+				.onClick(async () => {
+					await this.app.fileManager.trashFile(file);
+					this.scheduleRefresh();
+				})
+		);
+		menu.showAtMouseEvent(evt);
 	}
 
 	private highlightActive() {
@@ -498,6 +667,67 @@ class BearSidebarView extends ItemView {
 	}
 }
 
+/* --------------------------- rename modal --------------------------- */
+
+class RenameModal extends Modal {
+	private file: TFile;
+
+	constructor(app: App, file: TFile) {
+		super(app);
+		this.file = file;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.addClass("bear-rename-modal");
+		contentEl.createEl("h3", { text: "Rename note" });
+
+		const input = contentEl.createEl("input", {
+			cls: "bear-rename-input",
+			attr: { type: "text" },
+		});
+		input.value = this.file.basename;
+		input.focus();
+		input.select();
+
+		const submit = async () => {
+			const name = input.value.trim();
+			if (name && name !== this.file.basename) {
+				const parent = this.file.parent;
+				const dir =
+					parent && parent.path && parent.path !== "/"
+						? parent.path + "/"
+						: "";
+				try {
+					await this.app.fileManager.renameFile(
+						this.file,
+						dir + name + ".md"
+					);
+				} catch (e) {
+					/* name clash or invalid characters — leave as-is */
+				}
+			}
+			this.close();
+		};
+
+		input.addEventListener("keydown", (e: KeyboardEvent) => {
+			if (e.key === "Enter") submit();
+			if (e.key === "Escape") this.close();
+		});
+
+		const actions = contentEl.createDiv({ cls: "bear-rename-actions" });
+		const btn = actions.createEl("button", {
+			cls: "mod-cta",
+			text: "Rename",
+		});
+		btn.addEventListener("click", submit);
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
 /* --------------------------- helpers --------------------------- */
 
 function plural(n: number, noun: string): string {
@@ -520,6 +750,7 @@ function makeSnippet(content: string, title: string): string {
 			l
 				.replace(/^#+\s*/, "") // heading markers
 				.replace(/^[>\-*+]\s*/, "") // quote / list markers
+				.replace(/^\s*\[[ xX]\]\s*/, "") // task checkboxes
 				.replace(/[`*_~]/g, "") // inline emphasis / code
 				.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // links / images -> text
 				.trim()
@@ -585,15 +816,34 @@ class BearModeSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Color theme")
+			.setDesc(
+				"Bear's signature color themes. Pick Custom to choose your own accent below."
+			)
+			.addDropdown((dropdown) => {
+				for (const theme of BEAR_THEMES) {
+					dropdown.addOption(theme.id, theme.name);
+				}
+				dropdown
+					.setValue(this.plugin.settings.themePreset)
+					.onChange(async (id: string) => {
+						this.plugin.applyThemePreset(id);
+						await this.plugin.saveSettings();
+						this.display();
+					});
+			});
+
+		new Setting(containerEl)
 			.setName("Accent color")
 			.setDesc(
-				"Bear uses a single accent color throughout. This drives headings, links, tags, and selections."
+				"The single accent color used across the UI (sets the theme to Custom)."
 			)
 			.addColorPicker((picker) =>
 				picker
 					.setValue(this.plugin.settings.accentColor)
 					.onChange(async (value) => {
 						this.plugin.settings.accentColor = value;
+						this.plugin.settings.themePreset = "custom";
 						await this.plugin.saveSettings();
 						this.plugin.applyAccent();
 					})
@@ -632,7 +882,9 @@ class BearModeSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Open sidebar on startup")
-			.setDesc("Reveal the Bear sidebar automatically when Obsidian starts.")
+			.setDesc(
+				"Reveal the Bear sidebar automatically when Obsidian starts."
+			)
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.openSidebarOnStartup)

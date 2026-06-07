@@ -1,9 +1,9 @@
 {
 	"id": "bear-mode",
 	"name": "Bear Mode",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"minAppVersion": "1.4.0",
-	"description": "Makes Obsidian look, feel, and function like Bear — a tag-tree + note-list sidebar with previews, clean typography, a single signature accent color, tag pills, and a Bear-style word / character / reading-time info bar.",
+	"description": "Turns Obsidian into a Bear-style notes app — a tag-tree + note-list sidebar with previews, pinned notes, a right-click note menu, named Bear color themes, Bear typography, tag pills, and a word / character / reading-time info bar.",
 	"author": "Corey Hall",
 	"isDesktopOnly": false
 }

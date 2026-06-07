@@ -225,8 +225,69 @@ body.bear-mode-enabled .tree-item-self.is-active {
 /* Note list */
 .bear-sidebar .bear-notes {
 	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+/* Note list header: scope + count + sort toggle */
+.bear-sidebar .bear-notes-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 14px 6px;
+	flex: 0 0 auto;
+}
+
+.bear-sidebar .bear-notes-scope {
+	font-size: 0.78em;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.bear-sidebar .bear-sort-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	color: var(--text-muted);
+	flex: 0 0 auto;
+}
+
+.bear-sidebar .bear-sort-btn:hover {
+	color: var(--bear-accent);
+}
+
+.bear-sidebar .bear-sort-btn .svg-icon {
+	width: 15px;
+	height: 15px;
+}
+
+.bear-sidebar .bear-notes-list {
+	flex: 1 1 auto;
 	overflow-y: auto;
-	padding: 4px 0 12px;
+	padding: 0 0 12px;
+}
+
+/* Section label (e.g. "Pinned") and divider in the note list */
+.bear-sidebar .bear-list-section {
+	padding: 6px 14px 2px;
+	font-size: 0.72em;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--bear-accent);
+}
+
+.bear-sidebar .bear-list-divider {
+	height: 1px;
+	margin: 6px 14px;
+	background: var(--background-modifier-border);
 }
 
 .bear-sidebar .bear-note-item {
@@ -247,6 +308,23 @@ body.bear-mode-enabled .tree-item-self.is-active {
 
 .bear-sidebar .bear-note-item.is-active {
 	background: color-mix(in srgb, var(--bear-accent) 14%, transparent);
+}
+
+.bear-sidebar .bear-note-title-row {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+}
+
+.bear-sidebar .bear-pin-icon {
+	display: inline-flex;
+	align-items: center;
+	color: var(--bear-accent);
+}
+
+.bear-sidebar .bear-pin-icon .svg-icon {
+	width: 12px;
+	height: 12px;
 }
 
 .bear-sidebar .bear-note-title {
@@ -281,4 +359,100 @@ body.bear-mode-enabled .tree-item-self.is-active {
 	color: var(--text-faint);
 	font-size: 0.9em;
 }
+
+/* Rename modal */
+.bear-rename-modal .bear-rename-input {
+	width: 100%;
+	margin: 8px 0 14px;
+	padding: 8px 10px;
+	border-radius: 8px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-modifier-form-field);
+	font-size: 1em;
+}
+
+.bear-rename-actions {
+	display: flex;
+	justify-content: flex-end;
+}
+
+/* ================================================================== *
+ *  Extra Bear-flavored editor typography (theme-gated).
+ * ================================================================== */
+
+/* Task lists, Bear-style */
+body.bear-mode-enabled .markdown-preview-view
+	.task-list-item-checkbox,
+body.bear-mode-enabled .markdown-source-view.mod-cm6
+	input[type="checkbox"] {
+	accent-color: var(--bear-accent);
+	border-radius: 6px;
+}
+
+body.bear-mode-enabled .markdown-preview-view
+	.task-list-item.is-checked {
+	color: var(--text-muted);
+	text-decoration: line-through;
+	text-decoration-color: color-mix(
+		in srgb,
+		var(--bear-accent) 60%,
+		transparent
+	);
+}
+
+/* Blockquotes with an accent rule */
+body.bear-mode-enabled .markdown-preview-view blockquote,
+body.bear-mode-enabled .markdown-source-view.mod-cm6 .HyperMD-quote {
+	border-left: 3px solid var(--bear-accent);
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+/* Inline code & code blocks: soft, rounded */
+body.bear-mode-enabled .markdown-preview-view code,
+body.bear-mode-enabled .cm-inline-code {
+	background: color-mix(in srgb, var(--bear-accent) 9%, transparent);
+	border-radius: 5px;
+	padding: 1px 5px;
+}
+
+body.bear-mode-enabled .markdown-preview-view pre {
+	border-radius: 10px;
+	border: 1px solid var(--background-modifier-border);
+}
+
+/* Horizontal rule as a soft Bear divider */
+body.bear-mode-enabled .markdown-preview-view hr,
+body.bear-mode-enabled .markdown-source-view.mod-cm6 hr {
+	border: none;
+	height: 2px;
+	border-radius: 2px;
+	background: color-mix(in srgb, var(--bear-accent) 30%, transparent);
+}
+
+/* Tables: rounded with an accent header */
+body.bear-mode-enabled .markdown-preview-view table {
+	border-radius: 10px;
+	overflow: hidden;
+	border-collapse: separate;
+	border-spacing: 0;
+}
+
+body.bear-mode-enabled .markdown-preview-view thead th {
+	background: color-mix(in srgb, var(--bear-accent) 12%, transparent);
+	color: var(--text-normal);
+}
+
+/* Links carry a subtle accent underline */
+body.bear-mode-enabled .markdown-preview-view a,
+body.bear-mode-enabled .cm-link,
+body.bear-mode-enabled .cm-url {
+	text-decoration-color: color-mix(
+		in srgb,
+		var(--bear-accent) 50%,
+		transparent
+	);
+	text-underline-offset: 2px;
+}
+
 

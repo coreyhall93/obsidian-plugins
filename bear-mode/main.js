@@ -10,15 +10,33 @@ exports.VIEW_TYPE_BEAR = "bear-sidebar";
 // Special pseudo-tags used by the sidebar's tag list.
 const TAG_ALL = null;
 const TAG_UNTAGGED = "__untagged__";
+const SORT_LABEL = {
+    modified: "Modified date",
+    created: "Created date",
+    title: "Title",
+};
+// Bear's signature themes, approximated by their accent colors.
+const BEAR_THEMES = [
+    { id: "red-graphite", name: "Red Graphite", accent: "#e0484c" },
+    { id: "charcoal", name: "Charcoal", accent: "#f24b59" },
+    { id: "solarized", name: "Solarized", accent: "#268bd2" },
+    { id: "gotham", name: "Gotham", accent: "#2aa198" },
+    { id: "toothpaste", name: "Toothpaste", accent: "#16b8c4" },
+    { id: "cobalt", name: "Cobalt", accent: "#2f72e0" },
+    { id: "dracula", name: "Dracula", accent: "#bd93f9" },
+    { id: "panic-mode", name: "Panic Mode", accent: "#ff3b30" },
+    { id: "custom", name: "Custom", accent: "" },
+];
 const DEFAULT_SETTINGS = {
     enableTheme: true,
-    // Bear's classic red.
+    themePreset: "red-graphite",
     accentColor: "#e0484c",
     showInfoBar: true,
     wordsPerMinute: 200,
     showSnippets: true,
     noteSort: "modified",
     openSidebarOnStartup: false,
+    pinned: [],
 };
 const BODY_CLASS = "bear-mode-enabled";
 class BearModePlugin extends obsidian_1.Plugin {
@@ -40,6 +58,21 @@ class BearModePlugin extends obsidian_1.Plugin {
         this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.updateInfoBar()));
         this.registerEvent(this.app.workspace.on("editor-change", () => this.updateInfoBar()));
         this.registerEvent(this.app.workspace.on("file-open", () => this.updateInfoBar()));
+        // Drop pins that point at notes which no longer exist.
+        this.registerEvent(this.app.vault.on("delete", (file) => {
+            const i = this.settings.pinned.indexOf(file.path);
+            if (i >= 0) {
+                this.settings.pinned.splice(i, 1);
+                this.saveSettings();
+            }
+        }));
+        this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+            const i = this.settings.pinned.indexOf(oldPath);
+            if (i >= 0) {
+                this.settings.pinned[i] = file.path;
+                this.saveSettings();
+            }
+        }));
         this.addCommand({
             id: "toggle-bear-theme",
             name: "Toggle Bear theme",
@@ -87,11 +120,31 @@ class BearModePlugin extends obsidian_1.Plugin {
                 view.render();
         });
     }
+    isPinned(path) {
+        return this.settings.pinned.includes(path);
+    }
+    async togglePin(path) {
+        const i = this.settings.pinned.indexOf(path);
+        if (i >= 0)
+            this.settings.pinned.splice(i, 1);
+        else
+            this.settings.pinned.push(path);
+        await this.saveSettings();
+        this.refreshSidebar();
+    }
     applyTheme() {
         document.body.toggleClass(BODY_CLASS, this.settings.enableTheme);
     }
     applyAccent() {
         document.body.style.setProperty("--bear-accent", this.settings.accentColor);
+    }
+    /** Switch to a named Bear theme (updates the accent color). */
+    applyThemePreset(id) {
+        this.settings.themePreset = id;
+        const theme = BEAR_THEMES.find((t) => t.id === id);
+        if (theme && theme.accent)
+            this.settings.accentColor = theme.accent;
+        this.applyAccent();
     }
     updateInfoBar() {
         const item = this.statusBarItem;
@@ -237,29 +290,100 @@ class BearSidebarView extends obsidian_1.ItemView {
             files = files.filter((f) => f.basename.toLowerCase().includes(q));
         }
         files = this.sortFiles(files).slice(0, 300);
+        // List header: scope name + count + sort toggle.
+        const scope = this.selectedTag === TAG_ALL
+            ? "All Notes"
+            : this.selectedTag === TAG_UNTAGGED
+                ? "Untagged"
+                : this.selectedTag.replace(/^#/, "");
+        const listHeader = el.createDiv({ cls: "bear-notes-header" });
+        listHeader.createSpan({
+            cls: "bear-notes-scope",
+            text: `${scope} · ${files.length}`,
+        });
+        const sortBtn = listHeader.createSpan({ cls: "bear-sort-btn" });
+        (0, obsidian_1.setIcon)(sortBtn, "arrow-up-down");
+        sortBtn.setAttr("aria-label", `Sort by ${SORT_LABEL[this.plugin.settings.noteSort]}`);
+        sortBtn.addEventListener("click", async () => {
+            const order = ["modified", "created", "title"];
+            const next = order[(order.indexOf(this.plugin.settings.noteSort) + 1) %
+                order.length];
+            this.plugin.settings.noteSort = next;
+            await this.plugin.saveSettings();
+            this.renderNotes();
+        });
+        const list = el.createDiv({ cls: "bear-notes-list" });
         if (files.length === 0) {
-            el.createDiv({ cls: "bear-empty", text: "No notes" });
+            list.createDiv({ cls: "bear-empty", text: "No notes" });
             return;
         }
-        const active = this.app.workspace.getActiveFile();
-        for (const file of files) {
-            const item = el.createDiv({ cls: "bear-note-item" });
-            item.dataset.path = file.path;
-            if (active && active.path === file.path)
-                item.addClass("is-active");
-            item.createDiv({ cls: "bear-note-title", text: file.basename });
-            if (this.plugin.settings.showSnippets) {
-                const snippetEl = item.createDiv({ cls: "bear-note-snippet" });
-                this.app.vault.cachedRead(file).then((content) => {
-                    snippetEl.setText(makeSnippet(content, file.basename));
-                });
-            }
-            item.createDiv({
-                cls: "bear-note-meta",
-                text: formatDate(file.stat.mtime),
-            });
-            item.addEventListener("click", () => this.openNote(file));
+        // Pinned notes float to the top, like Bear.
+        const pinnedSet = new Set(this.plugin.settings.pinned);
+        const pinned = files.filter((f) => pinnedSet.has(f.path));
+        const others = files.filter((f) => !pinnedSet.has(f.path));
+        if (pinned.length) {
+            list.createDiv({ cls: "bear-list-section", text: "Pinned" });
+            for (const f of pinned)
+                this.renderNoteItem(list, f, true);
+            if (others.length)
+                list.createDiv({ cls: "bear-list-divider" });
         }
+        for (const f of others)
+            this.renderNoteItem(list, f, false);
+    }
+    renderNoteItem(container, file, pinned) {
+        const item = container.createDiv({ cls: "bear-note-item" });
+        item.dataset.path = file.path;
+        const active = this.app.workspace.getActiveFile();
+        if (active && active.path === file.path)
+            item.addClass("is-active");
+        const titleRow = item.createDiv({ cls: "bear-note-title-row" });
+        if (pinned) {
+            const pin = titleRow.createSpan({ cls: "bear-pin-icon" });
+            (0, obsidian_1.setIcon)(pin, "pin");
+        }
+        titleRow.createSpan({ cls: "bear-note-title", text: file.basename });
+        if (this.plugin.settings.showSnippets) {
+            const snippetEl = item.createDiv({ cls: "bear-note-snippet" });
+            this.app.vault.cachedRead(file).then((content) => {
+                snippetEl.setText(makeSnippet(content, file.basename));
+            });
+        }
+        item.createDiv({
+            cls: "bear-note-meta",
+            text: formatDate(file.stat.mtime),
+        });
+        item.addEventListener("click", () => this.openNote(file));
+        item.addEventListener("contextmenu", (evt) => this.showNoteMenu(evt, file));
+    }
+    showNoteMenu(evt, file) {
+        evt.preventDefault();
+        const menu = new obsidian_1.Menu();
+        const isPinned = this.plugin.isPinned(file.path);
+        menu.addItem((i) => i
+            .setTitle(isPinned ? "Unpin" : "Pin to top")
+            .setIcon("pin")
+            .onClick(() => this.plugin.togglePin(file.path)));
+        menu.addItem((i) => i
+            .setTitle("Open in new tab")
+            .setIcon("file-plus")
+            .onClick(async () => {
+            const leaf = this.app.workspace.getLeaf("tab");
+            await leaf.openFile(file);
+        }));
+        menu.addSeparator();
+        menu.addItem((i) => i
+            .setTitle("Rename")
+            .setIcon("pencil")
+            .onClick(() => new RenameModal(this.app, file).open()));
+        menu.addItem((i) => i
+            .setTitle("Delete")
+            .setIcon("trash")
+            .onClick(async () => {
+            await this.app.fileManager.trashFile(file);
+            this.scheduleRefresh();
+        }));
+        menu.showAtMouseEvent(evt);
     }
     highlightActive() {
         if (!this.notesEl)
@@ -341,6 +465,56 @@ class BearSidebarView extends obsidian_1.ItemView {
         this.scheduleRefresh();
     }
 }
+/* --------------------------- rename modal --------------------------- */
+class RenameModal extends obsidian_1.Modal {
+    constructor(app, file) {
+        super(app);
+        this.file = file;
+    }
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.addClass("bear-rename-modal");
+        contentEl.createEl("h3", { text: "Rename note" });
+        const input = contentEl.createEl("input", {
+            cls: "bear-rename-input",
+            attr: { type: "text" },
+        });
+        input.value = this.file.basename;
+        input.focus();
+        input.select();
+        const submit = async () => {
+            const name = input.value.trim();
+            if (name && name !== this.file.basename) {
+                const parent = this.file.parent;
+                const dir = parent && parent.path && parent.path !== "/"
+                    ? parent.path + "/"
+                    : "";
+                try {
+                    await this.app.fileManager.renameFile(this.file, dir + name + ".md");
+                }
+                catch (e) {
+                    /* name clash or invalid characters — leave as-is */
+                }
+            }
+            this.close();
+        };
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter")
+                submit();
+            if (e.key === "Escape")
+                this.close();
+        });
+        const actions = contentEl.createDiv({ cls: "bear-rename-actions" });
+        const btn = actions.createEl("button", {
+            cls: "mod-cta",
+            text: "Rename",
+        });
+        btn.addEventListener("click", submit);
+    }
+    onClose() {
+        this.contentEl.empty();
+    }
+}
 /* --------------------------- helpers --------------------------- */
 function plural(n, noun) {
     return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
@@ -359,6 +533,7 @@ function makeSnippet(content, title) {
         .map((l) => l
         .replace(/^#+\s*/, "") // heading markers
         .replace(/^[>\-*+]\s*/, "") // quote / list markers
+        .replace(/^\s*\[[ xX]\]\s*/, "") // task checkboxes
         .replace(/[`*_~]/g, "") // inline emphasis / code
         .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // links / images -> text
         .trim())
@@ -407,12 +582,28 @@ class BearModeSettingTab extends obsidian_1.PluginSettingTab {
             this.plugin.applyTheme();
         }));
         new obsidian_1.Setting(containerEl)
+            .setName("Color theme")
+            .setDesc("Bear's signature color themes. Pick Custom to choose your own accent below.")
+            .addDropdown((dropdown) => {
+            for (const theme of BEAR_THEMES) {
+                dropdown.addOption(theme.id, theme.name);
+            }
+            dropdown
+                .setValue(this.plugin.settings.themePreset)
+                .onChange(async (id) => {
+                this.plugin.applyThemePreset(id);
+                await this.plugin.saveSettings();
+                this.display();
+            });
+        });
+        new obsidian_1.Setting(containerEl)
             .setName("Accent color")
-            .setDesc("Bear uses a single accent color throughout. This drives headings, links, tags, and selections.")
+            .setDesc("The single accent color used across the UI (sets the theme to Custom).")
             .addColorPicker((picker) => picker
             .setValue(this.plugin.settings.accentColor)
             .onChange(async (value) => {
             this.plugin.settings.accentColor = value;
+            this.plugin.settings.themePreset = "custom";
             await this.plugin.saveSettings();
             this.plugin.applyAccent();
         }));

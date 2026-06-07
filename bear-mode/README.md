@@ -6,13 +6,16 @@ This is a deliberately **minimal** plugin: it leans on Obsidian's own theming va
 
 ## Features
 
-- **Bear sidebar** — a dedicated pane with Bear's signature layout: a nested **tag tree** on top (plus *All Notes* and *Untagged*) and a **note list with previews** below. Each note shows its title, a one-line body snippet, and a Bear-style date (a time today, "Yesterday", or a short date). Click a tag to filter; click a note to open it. Open it from the ribbon (`#` icon) or the *Open Bear sidebar* command.
+- **Bear sidebar** — a dedicated pane with Bear's signature layout: a nested **tag tree** on top (plus *All Notes* and *Untagged*) and a **note list with previews** below. Each note shows its title, a one-line body snippet, and a Bear-style date (a time today, "Yesterday", or a short date). Open it from the ribbon (`#` icon) or the *Open Bear sidebar* command.
+  - **Click a tag** to filter the list; **click a note** to open it. The list highlights the active note and updates live as the vault changes.
+  - **Note-list header** shows the current scope and note count, with a one-click button to cycle the sort order.
+  - **Pinned notes** float to the top under a *Pinned* heading, just like Bear.
+  - **Right-click a note** for a context menu: *Pin / Unpin*, *Open in new tab*, *Rename* (inline dialog), and *Delete* (moves to trash).
   - **Search** notes by title within the current tag.
   - **Compose button** (`+`) creates a new note, pre-seeded with the selected tag — just like Bear.
-  - The list updates live as the vault changes, and highlights the active note.
-- **Bear typography** — a comfortable reading column, generous line height, and a clean system font stack.
-- **One accent color, everywhere** — like Bear, a single color drives headings, links, tags, checkboxes, and text selection. Pick your own in settings (defaults to Bear's classic red).
-- **Tag pills** — `#tags` render as soft, rounded, accent-colored pills in both editing and reading views.
+- **Named Bear color themes** — pick from Bear's signature themes (Red Graphite, Charcoal, Solarized, Gotham, Toothpaste, Cobalt, Dracula, Panic Mode), or choose **Custom** and set your own accent.
+- **One accent color, everywhere** — like Bear, a single color drives headings, links, tags, checkboxes, and text selection.
+- **Bear typography** — a comfortable reading column, generous line height, a clean font stack, accent-colored headings, tag **pills**, accent task-list checkboxes, accent blockquote rules, rounded code blocks, soft dividers, and rounded tables with an accent header.
 - **Info bar** — a Bear-style `123 words · 678 characters · 3 min read` readout lives in the status bar and updates as you type.
 - **Toggle command** — "Bear Mode: Toggle Bear theme" flips the styling on/off without disabling the plugin.
 
@@ -21,7 +24,8 @@ This is a deliberately **minimal** plugin: it leans on Obsidian's own theming va
 | Setting | What it does |
 | --- | --- |
 | **Bear theme** | Turns the Bear styling on or off. |
-| **Accent color** | The single accent used across the UI. |
+| **Color theme** | Pick a named Bear theme, or Custom. |
+| **Accent color** | The single accent used across the UI (sets the theme to Custom). |
 | **Note previews** | Shows/hides the one-line body snippet under each note. |
 | **Sort notes by** | Order the note list by modified date, created date, or title. |
 | **Open sidebar on startup** | Reveal the Bear sidebar automatically when Obsidian starts. |

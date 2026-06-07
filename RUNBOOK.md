@@ -210,12 +210,12 @@ intentionally tracks it) so the plugin installs without a build step.
 - No PR has been opened yet (none was requested).
 
 ### Commit history so far
-| Version | Commit | Summary |
-| --- | --- | --- |
-| 1.0.0 | `832b526` | Initial plugin: theme, accent, tag pills, status-bar info bar |
-| 1.1.0 | `e29c0ee` | Bear sidebar: tag tree + note list with previews |
-| 1.2.0 | `74b5d14` | Pinned notes, right-click menu, named themes, richer typography |
-| 1.3.0 | `768fd64` | Smart sections (Today/To Do/Archive), collapsible tag tree, archive, note info panel |
+| Version | Summary |
+| --- | --- |
+| 1.0.0 | Initial plugin: theme, accent, tag pills, status-bar info bar |
+| 1.1.0 | Bear sidebar: tag tree + note list with previews |
+| 1.2.0 | Pinned notes, right-click menu, named themes, richer typography |
+| 1.3.0 | Smart sections (Today/To Do/Archive), collapsible tag tree, archive, note info panel |
 
 ---
 

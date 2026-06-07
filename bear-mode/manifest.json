@@ -1,0 +1,9 @@
+{
+	"id": "bear-mode",
+	"name": "Bear Mode",
+	"version": "1.3.0",
+	"minAppVersion": "1.4.0",
+	"description": "Turns Obsidian into a Bear-style notes app — a sidebar with Today / To Do / Untagged / Archive sections and a collapsible tag tree, a note list with previews, pinned notes, a right-click note menu (pin, archive, rename, delete), a note info panel, named Bear color themes, and Bear typography.",
+	"author": "Corey Hall",
+	"isDesktopOnly": false
+}

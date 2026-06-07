@@ -1,0 +1,16 @@
+# intellij
+.idea
+
+# npm
+node_modules
+
+# build
+# NOTE: a prebuilt main.js is committed so the plugin is installable as-is.
+# `npm run build` will regenerate it.
+*.js.map
+
+# obsidian
+data.json
+
+# system
+.DS_Store
